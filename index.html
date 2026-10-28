@@ -117,6 +117,12 @@
   <div id="danger"></div>
 </div>
 <div id="scanlines"></div>
+<div id="mapPanel" style="display:none;position:fixed;z-index:8;inset:7%;background:rgba(3,8,10,.96);border:1px solid #65f0cc;padding:14px;box-shadow:0 0 30px #000">
+  <div style="display:flex;justify-content:space-between;align-items:center;color:#65f0cc;font:12px monospace;margin-bottom:10px">
+    <span>PLAYTEST MAP // <span id="mapLevel">LEVEL 1</span></span><button id="closeMap" style="padding:7px 12px">CLOSE [M]</button>
+  </div>
+  <canvas id="mapCanvas" style="width:100%;height:calc(100% - 36px);display:block;background:#101719"></canvas>
+</div>
 
 <div id="overlay">
   <div id="panel">
@@ -131,7 +137,7 @@
     <div id="controls">
       WASD — MOVE &nbsp; // &nbsp; MOUSE — LOOK<br>
       SHIFT — SPRINT &nbsp; // &nbsp; F — FLASHLIGHT<br>
-      E — INTERACT &nbsp; // &nbsp; ESC — PAUSE
+      E — INTERACT &nbsp; // &nbsp; M — PLAYTEST MAP &nbsp; // &nbsp; ESC — PAUSE
     </div>
   </div>
 </div>
@@ -148,51 +154,38 @@ const PLAYER_HEIGHT = 1.65;
 const WALK_SPEED = 4.1;
 const RUN_SPEED = 6.5;
 
-// # = wall, P = starting point, E = exit
-const maze = [
-  "###############",
-  "#P....#.......#",
-  "###.#.#.###.#.#",
-  "#...#...#...#.#",
-  "#.#####.#.###.#",
-  "#.....#.#.....#",
-  "#.###.#.#####.#",
-  "#.#...#.....#.#",
-  "#.#.#####.#.#.#",
-  "#...#.....#...#",
-  "###.#.#######.#",
-  "#...#.....#...#",
-  "#.#######.#.###",
-  "#.........#...E",
-  "###############"
+// # = wall, P = starting point, E = exit. Each level has a fixed layout.
+const MAZES = [
+  [
+    "###############", "#P....#.......#", "###.#.#.###.#.#",
+    "#...#...#...#.#", "#.#####.#.###.#", "#.....#.#.....#",
+    "#.###.#.#####.#", "#.#...#.....#.#", "#.#.#####.#.#.#",
+    "#...#.....#...#", "###.#.#######.#", "#...#.....#...#",
+    "#.#######.#.###", "#.........#...E", "###############"
+  ],
+  [
+    "###############", "#P.....#......#", "#.###..#.####.#",
+    "#...#..#....#.#", "###.#.####..#.#", "#...#......##.#",
+    "#.####.###....#", "#......#...##.#", "####.#.#.##...#",
+    "#....#.#....#.#", "#.####.####.#.#", "#......#....#.#",
+    "#.####.#.####.#", "#..........#..E", "###############"
+  ],
+  [
+    "###############", "#P....#.......#", "#.##..#.#####.#",
+    "#..#..#.....#.#", "##.#.#####..#.#", "#..#.....#..#.#",
+    "#..####.#..#..#", "#......#.#.##.#", "####.#...#....#",
+    "#....###.####.#", "#.##.....#....#", "#..#####.#.##.#",
+    "#......#......#", "#....#........E", "###############"
+  ]
 ];
+let maze = MAZES[0];
 const ROWS = maze.length;
 const COLS = maze[0].length;
 
-// The original maze is preserved as Level 1. Later levels reuse its layout
-// while adding keycards, darker textures, heavier fog, and a faster creature.
 const LEVELS = [
-  {
-    name: 'RESEARCH LAB',
-    cards: [[1,5],[5,11],[11,5]],
-    monsterSpeed: 2.05,
-    chaseSpeed: 3.05,
-    wallStyle: 1
-  },
-  {
-    name: 'CONTAINMENT WING',
-    cards: [[1,5],[3,10],[5,11],[9,1]],
-    monsterSpeed: 2.55,
-    chaseSpeed: 3.7,
-    wallStyle: 2
-  },
-  {
-    name: 'THE CORE',
-    cards: [[1,5],[3,10],[5,11],[9,1],[11,5]],
-    monsterSpeed: 3.05,
-    chaseSpeed: 4.3,
-    wallStyle: 3
-  }
+  { name: 'RESEARCH LAB', cards: 3, monsterSpeed: 2.05, chaseSpeed: 3.05, wallStyle: 1, monsterSpawns: [[11,12],[9,12],[13,3]] },
+  { name: 'CONTAINMENT WING', cards: 4, monsterSpeed: 2.55, chaseSpeed: 3.7, wallStyle: 2, monsterSpawns: [[11,12],[9,1],[13,2]] },
+  { name: 'THE CORE', cards: 5, monsterSpeed: 3.05, chaseSpeed: 4.3, wallStyle: 3, monsterSpawns: [[11,12],[7,12],[13,3]] }
 ];
 let currentLevel = 1;
 let levelComplete = false;
@@ -454,24 +447,25 @@ ceiling.position.y = WALL_HEIGHT;
 scene.add(ceiling);
 
 const wallGeometry = new THREE.BoxGeometry(TILE, WALL_HEIGHT, TILE);
-const wallMeshes = [];
-
-for (let r = 0; r < ROWS; r++) {
-  for (let c = 0; c < COLS; c++) {
-    if (maze[r][c] !== '#') continue;
-    const wall = new THREE.Mesh(wallGeometry, concreteMat);
-    const p = worldPos(r, c);
-    wall.position.set(p.x, WALL_HEIGHT / 2, p.z);
-    scene.add(wall);
-    wallMeshes.push(wall);
+let wallGroup = new THREE.Group();
+scene.add(wallGroup);
+function rebuildMazeWalls() {
+  scene.remove(wallGroup);
+  wallGroup = new THREE.Group();
+  scene.add(wallGroup);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (maze[r][c] !== '#') continue;
+      const wall = new THREE.Mesh(wallGeometry, concreteMat);
+      const p = worldPos(r,c);
+      wall.position.set(p.x, WALL_HEIGHT / 2, p.z);
+      wallGroup.add(wall);
+      addBox(wallGroup, [TILE,0.18,TILE], [p.x,0.18,p.z], darkMetalMat);
+      addBox(wallGroup, [TILE,0.12,TILE], [p.x,WALL_HEIGHT-0.3,p.z], metalMat);
+    }
   }
 }
-
-for (const wall of wallMeshes) {
-  const p = wall.position;
-  addBox(scene, [TILE, 0.18, TILE], [p.x, 0.18, p.z], darkMetalMat);
-  addBox(scene, [TILE, 0.12, TILE], [p.x, WALL_HEIGHT - 0.3, p.z], metalMat);
-}
+rebuildMazeWalls();
 
 for (let r = 1; r < ROWS - 1; r++) {
   for (let c = 1; c < COLS - 1; c++) {
@@ -582,16 +576,6 @@ for (let i = 0; i < lampPositions.length; i++) {
   scene.add(light);
 }
 
-const stripeMat = new THREE.MeshStandardMaterial({
-  color: 0xd1a22d, roughness: 0.75
-});
-
-for (const [r,c] of [[2,3],[4,3],[6,5],[8,7],[10,4],[12,5]]) {
-  if (!isOpen(r,c)) continue;
-  const p = worldPos(r,c);
-  addBox(scene, [1.3, 0.12, 0.05], [p.x, 0.45, p.z - 1.94], stripeMat);
-}
-
 // ----------------------------------------------------
 // PLAYER AND FLASHLIGHT
 // ----------------------------------------------------
@@ -613,45 +597,9 @@ scene.add(flashlight.target);
 const flashlightBulb = new THREE.PointLight(0xcde9ff, 1.1, 3, 2);
 scene.add(flashlightBulb);
 
-let flashlightFlickerOff = false;
-let flashlightFlickerTimer = 5 + Math.random() * 7;
-let flashlightFlickerOffTime = 0;
-
 function syncFlashlightVisibility() {
-  const visible = player.flashlightOn && !flashlightFlickerOff;
-  flashlight.visible = visible;
-  flashlightBulb.visible = visible;
-}
-
-function updateFlashlightFlicker(dt) {
-  if (!running || !player.flashlightOn) {
-    flashlightFlickerOff = false;
-    flashlightFlickerOffTime = 0;
-    syncFlashlightVisibility();
-    return;
-  }
-
-  if (flashlightFlickerOff) {
-    flashlightFlickerOffTime -= dt;
-    if (flashlightFlickerOffTime <= 0) {
-      flashlightFlickerOff = false;
-      flashlightFlickerTimer = 3.5 + Math.random() * 8.5;
-    }
-  } else {
-    flashlightFlickerTimer -= dt;
-    if (flashlightFlickerTimer <= 0) {
-      if (Math.random() < 0.48) {
-        flashlightFlickerOff = true;
-        flashlightFlickerOffTime = Math.random() < 0.18
-          ? 0.9 + Math.random() * 0.8
-          : 0.12 + Math.random() * 0.48;
-      } else {
-        flashlightFlickerTimer = 2.5 + Math.random() * 7.5;
-      }
-    }
-  }
-
-  syncFlashlightVisibility();
+  flashlight.visible = player.flashlightOn;
+  flashlightBulb.visible = player.flashlightOn;
 }
 
 const keys = {};
@@ -676,6 +624,47 @@ const cardsText = document.getElementById('cards');
 const staminaFill = document.getElementById('staminaFill');
 const promptText = document.getElementById('prompt');
 const dangerOverlay = document.getElementById('danger');
+const mapPanel = document.getElementById('mapPanel');
+const mapCanvas = document.getElementById('mapCanvas');
+const mapCtx = mapCanvas.getContext('2d');
+const MAP_PASSCODE = '#Sup3rSc@ryEnt!ty6';
+let mapUnlocked = false;
+let mapVisible = false;
+
+function drawDebugMap() {
+  if (!mapUnlocked || !mapVisible) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(300, mapCanvas.clientWidth);
+  const h = Math.max(300, mapCanvas.clientHeight);
+  mapCanvas.width = w * dpr; mapCanvas.height = h * dpr;
+  mapCtx.setTransform(dpr,0,0,dpr,0,0);
+  mapCtx.clearRect(0,0,w,h);
+  const cell = Math.min(w / COLS, h / ROWS);
+  const ox = (w - cell * COLS) / 2, oy = (h - cell * ROWS) / 2;
+  for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++) {
+    mapCtx.fillStyle = maze[r][c] === '#' ? '#667176' : '#172326';
+    mapCtx.fillRect(ox+c*cell,oy+r*cell,cell-1,cell-1);
+  }
+  for (const card of keycards) if (!card.taken) {
+    const cc = cellAt(card.mesh.position);
+    mapCtx.fillStyle='#65f0cc'; mapCtx.beginPath(); mapCtx.arc(ox+(cc.col+.5)*cell,oy+(cc.row+.5)*cell,Math.max(3,cell*.22),0,Math.PI*2); mapCtx.fill();
+  }
+  const mc=cellAt(monster.position); mapCtx.fillStyle='#ff3434'; mapCtx.beginPath(); mapCtx.arc(ox+(mc.col+.5)*cell,oy+(mc.row+.5)*cell,Math.max(4,cell*.28),0,Math.PI*2); mapCtx.fill();
+  const pc=cellAt(camera.position); mapCtx.fillStyle='#ffe16b'; mapCtx.beginPath(); mapCtx.arc(ox+(pc.col+.5)*cell,oy+(pc.row+.5)*cell,Math.max(4,cell*.28),0,Math.PI*2); mapCtx.fill();
+  mapCtx.fillStyle='#dce7e9'; mapCtx.font='12px monospace'; mapCtx.fillText('PLAYER',8,15); mapCtx.fillStyle='#ffe16b'; mapCtx.fillRect(55,7,8,8); mapCtx.fillStyle='#65f0cc'; mapCtx.fillRect(78,7,8,8); mapCtx.fillStyle='#ff3434'; mapCtx.fillRect(101,7,8,8);
+  document.getElementById('mapLevel').textContent=`LEVEL ${currentLevel} — ${LEVELS[currentLevel-1].name}`;
+}
+function toggleDebugMap() {
+  if (!mapUnlocked) {
+    const entered = window.prompt('PLAYTEST MAP PASSCODE');
+    if (entered !== MAP_PASSCODE) { if (entered !== null) window.alert('Incorrect passcode.'); return; }
+    mapUnlocked = true;
+  }
+  mapVisible = !mapVisible;
+  mapPanel.style.display = mapVisible ? 'block' : 'none';
+  drawDebugMap();
+}
+document.getElementById('closeMap').addEventListener('click', () => { mapVisible=false; mapPanel.style.display='none'; });
 
 // ----------------------------------------------------
 // KEYCARDS
@@ -722,20 +711,49 @@ function createKeycard(r, c) {
   keycards.push({ mesh: group, taken: false });
 }
 
+function randomCardCells(count, monsterCell) {
+  const candidates = [];
+  for (let r = 1; r < ROWS - 1; r++) {
+    for (let c = 1; c < COLS - 1; c++) {
+      if (isOpen(r,c) && !(r === 1 && c === 1) && !(r === 13 && c === 14)) candidates.push([r,c]);
+    }
+  }
+  const chosen = [];
+  const used = new Set();
+  for (let i = 0; i < count; i++) {
+    // Four cards use four quadrants. Three/five cards use evenly divided columns.
+    const inSector = ([r,c]) => {
+      if (count === 4) return (i < 2 ? r < ROWS / 2 : r >= ROWS / 2) && (i % 2 === 0 ? c < COLS / 2 : c >= COLS / 2);
+      const sector = Math.floor(c / COLS * count);
+      return sector === i;
+    };
+    let pool = candidates.filter(cell => inSector(cell) && !used.has(cell.join(',')) &&
+      Math.hypot(cell[0] - monsterCell[0], cell[1] - monsterCell[1]) > 2.5 &&
+      Math.hypot(cell[0] - 1, cell[1] - 1) > 2.0);
+    if (!pool.length) pool = candidates.filter(cell => !used.has(cell.join(',')));
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    if (!pick) continue;
+    used.add(pick.join(','));
+    chosen.push(pick);
+  }
+  return chosen;
+}
+
 function spawnCardsForLevel() {
   for (const card of keycards) scene.remove(card.mesh);
   keycards.length = 0;
   collected = 0;
   const config = LEVELS[currentLevel - 1];
-  totalCards = config.cards.length;
-  for (const [r, c] of config.cards) createKeycard(r, c);
+  totalCards = config.cards;
+  const monsterCell = cellAt(monster.position);
+  for (const [r,c] of randomCardCells(totalCards, monsterCell)) createKeycard(r,c);
   updateObjective();
 }
 
 // ----------------------------------------------------
 // EXIT TERMINAL
 // ----------------------------------------------------
-const exitPosition = worldPos(13,14);
+let exitPosition = worldPos(13,14);
 const exitGroup = new THREE.Group();
 exitGroup.position.set(exitPosition.x, 0, exitPosition.z);
 scene.add(exitGroup);
@@ -835,7 +853,8 @@ const monsterGlow = new THREE.PointLight(0xff1717, 1.4, 5, 2);
 monsterGlow.position.set(0,3.1,-0.25);
 monster.add(monsterGlow);
 
-monster.position.copy(worldPos(11,12));
+const initialSpawn = LEVELS[0].monsterSpawns[Math.floor(Math.random() * 3)];
+monster.position.copy(worldPos(initialSpawn[0], initialSpawn[1]));
 monster.position.y = 0;
 monster.rotation.y = Math.PI;
 
@@ -1013,10 +1032,6 @@ function startNextLevel() {
   elapsed = 0;
   player.stamina = 100;
 
-  // Reset the flicker schedule for the next level.
-  flashlightFlickerOff = false;
-  flashlightFlickerOffTime = 0;
-  flashlightFlickerTimer = 4 + Math.random() * 8;
   syncFlashlightVisibility();
 
   // Return the player to the starting corridor.
@@ -1027,8 +1042,16 @@ function startNextLevel() {
   camera.position.y = PLAYER_HEIGHT;
   camera.rotation.set(0, 0, 0, 'YXZ');
 
-  // Reset the creature and its path.
-  monster.position.copy(worldPos(11, 12));
+  // Switch to this level's fixed layout and rebuild its walls.
+  maze = MAZES[currentLevel - 1];
+  rebuildMazeWalls();
+  exitPosition = worldPos(13,14);
+  exitGroup.position.set(exitPosition.x, 0, exitPosition.z);
+  exitLamp.position.set(exitPosition.x, 3, exitPosition.z);
+
+  // Pick a safe monster spawn from this level's three authored locations.
+  const spawn = LEVELS[currentLevel - 1].monsterSpawns[Math.floor(Math.random() * 3)];
+  monster.position.copy(worldPos(spawn[0], spawn[1]));
   monster.position.y = 0;
   monster.rotation.y = Math.PI;
 
@@ -1119,13 +1142,11 @@ document.addEventListener('mousemove', event => {
 document.addEventListener('keydown', event => {
   keys[event.code] = true;
 
+  if (event.code === 'KeyM' && !event.repeat) { toggleDebugMap(); return; }
+
   // F toggles the flashlight manually.
   if (event.code === 'KeyF' && !event.repeat) {
     player.flashlightOn = !player.flashlightOn;
-
-    if (!player.flashlightOn) {
-      flashlightFlickerOff = false;
-    }
 
     syncFlashlightVisibility();
   }
@@ -1389,7 +1410,6 @@ function animate() {
     elapsed += dt;
 
     updatePlayer(dt);
-    updateFlashlightFlicker(dt);
     updateCards(dt);
     updateMonster(dt);
     updatePrompt();
@@ -1412,6 +1432,7 @@ function animate() {
     }
   }
 
+  if (mapVisible) drawDebugMap();
   renderer.render(scene, camera);
 }
 
